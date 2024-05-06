@@ -111,7 +111,7 @@
 use std::convert::{TryFrom, TryInto};
 use std::ffi::{c_void, CString};
 use std::num::TryFromIntError;
-use std::ops::{Bound, RangeBounds, Index};
+use std::ops::{Bound, Index, RangeBounds};
 use std::os::raw::c_int;
 
 use highs_sys::*;
@@ -330,6 +330,32 @@ impl Model {
         }
     }
 
+    /// Set the solution to the problem.
+    pub fn set_solution(
+        &mut self,
+        soln: impl Iterator<Item = (Col, f64)>,
+    ) -> Result<(), HighsStatus> {
+        let mut col_values: Vec<Option<f64>> = vec![None; self.highs.num_cols().unwrap()];
+        for (col, value) in soln {
+            col_values[col.0] = Some(value);
+        }
+        let col_values = col_values
+            .into_iter()
+            .enumerate()
+            .map(|(i, v)| v.unwrap_or_else(|| panic!("missing value for column {}", i)))
+            .collect::<Vec<_>>();
+        unsafe {
+            highs_call!(Highs_setSolution(
+                self.highs.mut_ptr(),
+                col_values.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null()
+            ))
+            .map(|_| ())
+        }
+    }
+
     /// Prevents writing anything to the standard output or to files when solving the model
     pub fn make_quiet(&mut self) {
         self.highs.make_quiet()
@@ -374,12 +400,11 @@ impl Model {
     pub fn add_row(
         &mut self,
         bounds: impl RangeBounds<f64>,
-        row_factors: impl IntoIterator<Item=(Col, f64)>,
+        row_factors: impl IntoIterator<Item = (Col, f64)>,
     ) -> Row {
         self.try_add_row(bounds, row_factors)
             .unwrap_or_else(|e| panic!("HiGHS error: {:?}", e))
     }
-
 
     /// Tries to add a new constraint to the highs model.
     ///
@@ -387,26 +412,26 @@ impl Model {
     pub fn try_add_row(
         &mut self,
         bounds: impl RangeBounds<f64>,
-        row_factors: impl IntoIterator<Item=(Col, f64)>,
+        row_factors: impl IntoIterator<Item = (Col, f64)>,
     ) -> Result<Row, HighsStatus> {
         let (cols, factors): (Vec<_>, Vec<_>) = row_factors.into_iter().unzip();
 
         unsafe {
-            highs_call!(
-                Highs_addRow(
-                    self.highs.mut_ptr(),
-                    bound_value(bounds.start_bound()).unwrap_or(f64::NEG_INFINITY),
-                    bound_value(bounds.end_bound()).unwrap_or(f64::INFINITY),
-                    cols.len().try_into().unwrap(),
-                    cols.into_iter().map(|c| c.0.try_into().unwrap()).collect::<Vec<_>>().as_ptr(),
-                    factors.as_ptr()
-                )
-           )
+            highs_call!(Highs_addRow(
+                self.highs.mut_ptr(),
+                bound_value(bounds.start_bound()).unwrap_or(f64::NEG_INFINITY),
+                bound_value(bounds.end_bound()).unwrap_or(f64::INFINITY),
+                cols.len().try_into().unwrap(),
+                cols.into_iter()
+                    .map(|c| c.0.try_into().unwrap())
+                    .collect::<Vec<_>>()
+                    .as_ptr(),
+                factors.as_ptr()
+            ))
         }?;
 
         Ok(Row((self.highs.num_rows()? - 1) as c_int))
     }
-
 
     /// Adds a new variable to the highs model.
     ///
@@ -419,7 +444,7 @@ impl Model {
         &mut self,
         col_factor: f64,
         bounds: impl RangeBounds<f64>,
-        row_factors: impl IntoIterator<Item=(Row, f64)>,
+        row_factors: impl IntoIterator<Item = (Row, f64)>,
     ) -> Col {
         self.try_add_column(col_factor, bounds, row_factors)
             .unwrap_or_else(|e| panic!("HiGHS error: {:?}", e))
@@ -432,21 +457,22 @@ impl Model {
         &mut self,
         col_factor: f64,
         bounds: impl RangeBounds<f64>,
-        row_factors: impl IntoIterator<Item=(Row, f64)>,
+        row_factors: impl IntoIterator<Item = (Row, f64)>,
     ) -> Result<Col, HighsStatus> {
         let (rows, factors): (Vec<_>, Vec<_>) = row_factors.into_iter().unzip();
         unsafe {
-            highs_call!(
-                Highs_addCol(
-                    self.highs.mut_ptr(),
-                    col_factor,
-                    bound_value(bounds.start_bound()).unwrap_or(f64::NEG_INFINITY),
-                    bound_value(bounds.end_bound()).unwrap_or(f64::INFINITY),
-                    rows.len().try_into().unwrap(),
-                    rows.into_iter().map(|r| r.0.try_into().unwrap()).collect::<Vec<_>>().as_ptr(),
-                    factors.as_ptr()
-                )
-            )
+            highs_call!(Highs_addCol(
+                self.highs.mut_ptr(),
+                col_factor,
+                bound_value(bounds.start_bound()).unwrap_or(f64::NEG_INFINITY),
+                bound_value(bounds.end_bound()).unwrap_or(f64::INFINITY),
+                rows.len().try_into().unwrap(),
+                rows.into_iter()
+                    .map(|r| r.0.try_into().unwrap())
+                    .collect::<Vec<_>>()
+                    .as_ptr(),
+                factors.as_ptr()
+            ))
         }?;
 
         Ok(Col(self.highs.num_cols()? - 1))
@@ -508,7 +534,6 @@ impl HighsPtr {
         try_handle_status(status, "Highs_setOptionValue")
             .expect("An error was encountered in HiGHS.");
     }
-
 
     /// Number of variables
     fn num_cols(&self) -> Result<usize, TryFromIntError> {
